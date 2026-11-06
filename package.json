@@ -1,0 +1,35 @@
+{
+  "name": "@dockndevai/mcp-github-enterprise",
+  "mcpName": "io.github.dockndevai/mcp-github-enterprise",
+  "version": "0.1.0",
+  "description": "Model Context Protocol server for GitHub Enterprise (Cloud & Server) — organizations, members, teams, repos, rulesets, security alerts, Actions, and an org security-posture baseline, with governance controls (access modes, org scoping, protected orgs, delete gating, confirmation, dry-run, audit).",
+  "type": "module",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/dockndevai/mcp-github-enterprise.git" },
+  "bugs": { "url": "https://github.com/dockndevai/mcp-github-enterprise/issues" },
+  "homepage": "https://github.com/dockndevai/mcp-github-enterprise#readme",
+  "bin": { "mcp-github-enterprise": "dist/index.js" },
+  "files": ["dist"],
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "prepublishOnly": "npm run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "keywords": ["mcp", "model-context-protocol", "github", "github-enterprise", "github-actions", "devsecops", "governance", "security", "llm", "ai"],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.0",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  }
+}

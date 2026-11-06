@@ -1,0 +1,31 @@
+# Publishing `@dockndevai/mcp-github-enterprise`
+
+Standard stdio MCP server distributed on npm. Run these from your own accounts.
+
+## 0. Pre-flight
+- [ ] CI green; `version` matches in `package.json` and `server.json`.
+- [ ] README / `.env.example` / `server.json` list the same env vars; no secrets in examples.
+- [ ] `npm run typecheck && npm test && npm run build` all pass; `npm audit` is clean.
+
+## 1. npm
+```bash
+npm login
+npm publish --access public   # prepublishOnly builds first
+```
+`package.json` carries `"mcpName": "io.github.dockndevai/mcp-github-enterprise"` for registry ownership validation. Then clients can run `npx -y @dockndevai/mcp-github-enterprise`.
+
+## 2. Official MCP Registry
+```bash
+mcp-publisher login github
+mcp-publisher publish   # reads ./server.json
+```
+
+## 3. Smithery / Glama / Cursor / PulseMCP
+Community catalogs that index public GitHub repos (Glama auto-discovers via `glama.json`). Keep the README and `server.json` accurate; submit the repo URL where a form is required.
+
+## Automated releases (git tags)
+This repo ships [`.github/workflows/release.yml`](.github/workflows/release.yml). Add an npm automation token as the `NPM_TOKEN` secret:
+```bash
+gh secret set NPM_TOKEN --repo dockndevai/mcp-github-enterprise
+```
+Then `npm version patch` (bump `server.json` to match) and `git push --follow-tags`, or run the workflow from the Actions tab (dry_run toggle). To publish to the official MCP registry from CI, set the repo variable `PUBLISH_TO_MCP_REGISTRY=true` (passwordless GitHub OIDC for the `io.github.dockndevai` namespace).
