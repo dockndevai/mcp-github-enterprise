@@ -3,6 +3,13 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project uses semver.
 
+## [0.1.1] - 2026-11-06
+
+### Changed
+- Republish to escape an npm staging-limbo on the `0.1.0` upload (npm reported
+  success but committed only a `0.0.0-stage` placeholder, so the version never
+  became installable or registrable). No code changes from `0.1.0`.
+
 ## [0.1.0] - 2026-11-06
 
 ### Added
