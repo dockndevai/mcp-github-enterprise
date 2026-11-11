@@ -3,6 +3,7 @@ import type { ToolDef } from "./types.js";
 import { jsonResult, textResult } from "./types.js";
 import { ORG_SECURITY_BASELINE } from "../baseline.js";
 import { redact } from "../github/redact.js";
+import { change, pinned, show } from "./changes.js";
 
 const org = z.string().describe("Organization login (must be within GHE_ORG_ALLOWLIST when that is set)");
 const repo = z.string().describe("Repository name (without the org/ prefix)");
@@ -66,13 +67,14 @@ export const writeTools: ToolDef[] = [
       title: "Update org settings",
       description:
         "Update specific organization settings. Only known security/permission fields are accepted (others are ignored). " +
-        "Use harden_org_settings to apply the full baseline at once.",
+        "Use harden_org_settings to apply the full baseline at once. Honors dry-run and asks a human to approve the " +
+        "change (current → new values) before it writes.",
       inputSchema: {
         org,
         settings: z.record(z.string(), z.any()).describe("Map of allowed org fields to set, e.g. { default_repository_permission: 'read' }"),
       },
     },
-    handler: async (a, { client, policy }) => {
+    handler: async (a, { client, policy, confirm }) => {
       const o = a.org as string;
       const { dryRun } = policy.guard({ tool: "update_org_settings", capability: "write", org: o });
       const body: Record<string, unknown> = {};
@@ -84,6 +86,18 @@ export const writeTools: ToolDef[] = [
       if (Object.keys(body).length === 0)
         return { content: [{ type: "text" as const, text: `No writable fields. Allowed: ${[...WRITABLE_ORG_KEYS].join(", ")}` }], isError: true };
       if (dryRun) return textResult(`[dry-run] Would PATCH org '${o}': ${JSON.stringify(body)}${ignored.length ? ` (ignored: ${ignored.join(", ")})` : ""}`);
+      const keys = Object.keys(body);
+      const snap = await client.orgSettingsSnapshot(o, keys);
+      const details: Record<string, string> = {};
+      for (const k of keys) details[k] = snap ? change(snap.current[k], body[k]) : `(current value unavailable) → ${show(body[k])}`;
+      if (ignored.length) details["ignored (not writable)"] = ignored.join(", ");
+      const ok = await confirm.confirm({
+        action: "change organization settings",
+        target: o,
+        details,
+        probe: pinned(snap?.version, () => client.orgSettingsVersion(o, keys)),
+      });
+      if (!ok.approved) return textResult(`Cancelled — ${ok.reason}.`);
       return jsonResult(await client.updateOrg(o, body));
     },
   },
@@ -94,14 +108,15 @@ export const writeTools: ToolDef[] = [
       title: "Set Actions permissions",
       description:
         "Set the organization's GitHub Actions policy — which repositories may run Actions and which actions are allowed " +
-        "(restrict to 'selected' or 'local_only' to keep untrusted marketplace actions out of CI).",
+        "(restrict to 'selected' or 'local_only' to keep untrusted marketplace actions out of CI). Honors dry-run and " +
+        "asks a human to approve the change (current → new) before it writes.",
       inputSchema: {
         org,
         enabled_repositories: z.enum(["all", "none", "selected"]).optional().describe("Which repos may run Actions"),
         allowed_actions: z.enum(["all", "local_only", "selected"]).optional().describe("Which actions are allowed to run"),
       },
     },
-    handler: async (a, { client, policy }) => {
+    handler: async (a, { client, policy, confirm }) => {
       const o = a.org as string;
       const { dryRun } = policy.guard({ tool: "set_actions_permissions", capability: "write", org: o });
       const body: Record<string, unknown> = {};
@@ -109,6 +124,18 @@ export const writeTools: ToolDef[] = [
       if (a.allowed_actions) body.allowed_actions = a.allowed_actions;
       if (Object.keys(body).length === 0) return { content: [{ type: "text" as const, text: "Nothing to set." }], isError: true };
       if (dryRun) return textResult(`[dry-run] Would set Actions permissions on '${o}': ${JSON.stringify(body)}`);
+      const snap = await client.actionsPermissionsSnapshot(o);
+      const details: Record<string, string> = {};
+      for (const k of ["enabled_repositories", "allowed_actions"] as const) {
+        details[k] = !snap ? `(current value unavailable) → ${show(body[k])}` : k in body ? change(snap.current[k], body[k]) : `${show(snap.current[k])} (unchanged)`;
+      }
+      const ok = await confirm.confirm({
+        action: "change the organization's GitHub Actions policy",
+        target: o,
+        details,
+        probe: pinned(snap?.version, async () => (await client.actionsPermissionsSnapshot(o))?.version),
+      });
+      if (!ok.approved) return textResult(`Cancelled — ${ok.reason}.`);
       await client.setActionsPermissions(o, body);
       return jsonResult({ updated: true, org: o, ...body });
     },
@@ -168,17 +195,38 @@ export const writeTools: ToolDef[] = [
       title: "Create organization ruleset",
       description:
         "Create an org-wide ruleset (branch/tag protection). Pass the GitHub ruleset JSON (name, target, enforcement, " +
-        "conditions, rules). Example rules: pull_request (required reviews), required_status_checks, non_fast_forward.",
+        "conditions, rules). Example rules: pull_request (required reviews), required_status_checks, non_fast_forward. " +
+        "Honors dry-run and asks a human to approve it (shown next to the rulesets already in place) before it creates.",
       inputSchema: {
         org,
         ruleset: z.record(z.string(), z.any()).describe("A GitHub ruleset object. See docs.github.com/rest/orgs/rules."),
       },
     },
-    handler: async (a, { client, policy }) => {
+    handler: async (a, { client, policy, confirm }) => {
       const o = a.org as string;
       const { dryRun } = policy.guard({ tool: "create_org_ruleset", capability: "write", org: o });
       const body = a.ruleset as Record<string, unknown>;
       if (dryRun) return textResult(`[dry-run] Would create ruleset '${body.name ?? "(unnamed)"}' in '${o}'.`);
+      const snap = await client.rulesetSetSnapshot(o);
+      const name = typeof body.name === "string" ? body.name : "(unnamed)";
+      const rules = Array.isArray(body.rules) ? (body.rules as Array<{ type?: string }>).map((r) => r?.type ?? "?") : [];
+      const clash = snap.current.find((r) => r.name === body.name);
+      const ok = await confirm.confirm({
+        action: "create an organization ruleset (org-wide branch/tag rules)",
+        target: `${name} in ${o}`,
+        details: {
+          ruleset: `${name} (target ${show(body.target)}, enforcement ${show(body.enforcement)})`,
+          rules: show(rules),
+          conditions: body.conditions === undefined ? "none" : JSON.stringify(body.conditions),
+          "bypass actors": Array.isArray(body.bypass_actors) ? body.bypass_actors.length : "none",
+          "existing rulesets": snap.current.length
+            ? `${snap.current.length} — ${snap.current.map((r) => `${r.name} [${show(r.enforcement)}]`).join(", ")}`
+            : "0",
+          "same name already exists": clash ? `id ${clash.id}` : undefined,
+        },
+        probe: pinned(snap.version, async () => (await client.rulesetSetSnapshot(o)).version),
+      });
+      if (!ok.approved) return textResult(`Cancelled — ${ok.reason}.`);
       return jsonResult(await client.createOrgRuleset(o, body));
     },
   },
@@ -189,7 +237,9 @@ export const writeTools: ToolDef[] = [
       title: "Protect a branch",
       description:
         "Apply branch protection to a repository branch. With no explicit rules it applies a sensible default: require a " +
-        "pull request with 1 approval, dismiss stale reviews, enforce for admins, and block force-pushes/deletions.",
+        "pull request with 1 approval, dismiss stale reviews, enforce for admins, and block force-pushes/deletions. " +
+        "Honors dry-run and asks a human to approve it (current protection → new) before it writes; the PUT replaces " +
+        "the branch's whole protection, so the prompt also lists protections the call does not carry over.",
       inputSchema: {
         org,
         repo,
@@ -199,7 +249,7 @@ export const writeTools: ToolDef[] = [
         enforceAdmins: z.boolean().optional().describe("Apply the rules to admins too (default true)"),
       },
     },
-    handler: async (a, { client, policy }) => {
+    handler: async (a, { client, policy, confirm }) => {
       const o = a.org as string;
       const { dryRun } = policy.guard({ tool: "protect_branch", capability: "write", org: o });
       const approvals = (a.requiredApprovals as number) ?? 1;
@@ -213,7 +263,43 @@ export const writeTools: ToolDef[] = [
         allow_deletions: false,
       };
       if (dryRun) return textResult(`[dry-run] Would protect ${o}/${a.repo}@${a.branch}: ${JSON.stringify(body)}`);
-      return jsonResult(await client.putBranchProtection(o, a.repo as string, a.branch as string, body));
+      const repoName = a.repo as string;
+      const branch = a.branch as string;
+      const snap = await client.branchProtectionSnapshot(o, repoName, branch);
+      const cur = snap.current;
+      const newChecks = checks.length ? checks : null;
+      // `null` in the summary means the feature is off, which reads as "none" in a prompt.
+      const none = <T>(v: T | null | undefined): T | "none" => v ?? "none";
+      const details: Record<string, string> = {
+        "current protection": cur ? "present" : "none",
+        "required approving reviews": change(none(cur?.required_approving_reviews), approvals),
+        "dismiss stale reviews": change(none(cur?.dismiss_stale_reviews), true),
+        "enforce for admins": change(cur?.enforce_admins ?? false, body.enforce_admins),
+        "required status checks": change(none(cur?.required_status_checks), none(newChecks)),
+        "allow force pushes": change(cur?.allow_force_pushes ?? false, false),
+        "allow deletions": change(cur?.allow_deletions ?? false, false),
+        "push restrictions": change(none(cur?.push_restrictions), "none"),
+      };
+      if (cur) {
+        const dropped = (
+          [
+            ["require_code_owner_reviews", cur.require_code_owner_reviews],
+            ["required_linear_history", cur.required_linear_history],
+            ["required_conversation_resolution", cur.required_conversation_resolution],
+          ] as const
+        )
+          .filter(([, on]) => on === true)
+          .map(([k]) => k);
+        if (dropped.length) details["not specified by this call (PUT replaces the whole protection), enabled today"] = dropped.join(", ");
+      }
+      const ok = await confirm.confirm({
+        action: "replace branch protection",
+        target: `${o}/${repoName}@${branch}`,
+        details,
+        probe: pinned(snap.version, async () => (await client.branchProtectionSnapshot(o, repoName, branch)).version),
+      });
+      if (!ok.approved) return textResult(`Cancelled — ${ok.reason}.`);
+      return jsonResult(await client.putBranchProtection(o, repoName, branch, body));
     },
   },
   {
@@ -223,7 +309,8 @@ export const writeTools: ToolDef[] = [
       title: "Update repository security settings",
       description:
         "Enable/disable a repository's security_and_analysis features — secret scanning, push protection, and (where " +
-        "licensed) GitHub Advanced Security.",
+        "licensed) GitHub Advanced Security. Honors dry-run and asks a human to approve the change (current → new) " +
+        "before it writes.",
       inputSchema: {
         org,
         repo,
@@ -232,7 +319,7 @@ export const writeTools: ToolDef[] = [
         advanced_security: z.boolean().optional(),
       },
     },
-    handler: async (a, { client, policy }) => {
+    handler: async (a, { client, policy, confirm }) => {
       const o = a.org as string;
       const { dryRun } = policy.guard({ tool: "update_repo_security", capability: "write", org: o });
       const sa: Record<string, unknown> = {};
@@ -242,7 +329,21 @@ export const writeTools: ToolDef[] = [
       if (Object.keys(sa).length === 0) return { content: [{ type: "text" as const, text: "Nothing to update." }], isError: true };
       const body = { security_and_analysis: sa };
       if (dryRun) return textResult(`[dry-run] Would update security on ${o}/${a.repo}: ${JSON.stringify(body)}`);
-      return jsonResult(await client.updateRepo(o, a.repo as string, body));
+      const repoName = a.repo as string;
+      const snap = await client.repoSecuritySnapshot(o, repoName);
+      const details: Record<string, string> = {};
+      for (const [k, v] of Object.entries(sa)) {
+        const next = (v as { status: string }).status;
+        details[k] = snap ? change(snap.current[k], next) : `(current value unavailable) → ${next}`;
+      }
+      const ok = await confirm.confirm({
+        action: "change repository security settings",
+        target: `${o}/${repoName}`,
+        details,
+        probe: pinned(snap?.version, async () => (await client.repoSecuritySnapshot(o, repoName))?.version),
+      });
+      if (!ok.approved) return textResult(`Cancelled — ${ok.reason}.`);
+      return jsonResult(await client.updateRepo(o, repoName, body));
     },
   },
   {

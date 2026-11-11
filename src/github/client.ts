@@ -319,16 +319,68 @@ export class GithubClient {
   }
 
   /**
-   * The org settings that `harden_org_settings` is about to overwrite: org id + node_id and the CURRENT
-   * value of exactly the keys the action will write. Detects someone else changing those settings during
-   * the prompt; changes to other org fields are intentionally ignored.
+   * The org settings that `harden_org_settings` / `update_org_settings` are about to overwrite: org id + node_id
+   * and the CURRENT value of exactly the keys the action will write. Detects someone else changing those
+   * settings during the prompt; changes to other org fields are intentionally ignored.
    */
   async orgSettingsVersion(org: string, keys: string[]): Promise<string | undefined> {
+    return (await this.orgSettingsSnapshot(org, keys))?.version;
+  }
+
+  /** The current values of `keys` (what the human is shown as "current") and the version token over them. */
+  async orgSettingsSnapshot(org: string, keys: string[]): Promise<Snapshot<Record<string, unknown>> | undefined> {
     const o = await this.getOrUndefined<Record<string, unknown> & { id: number; node_id: string }>(`/orgs/${enc(org)}`);
     if (!o) return undefined;
     const current: Record<string, unknown> = {};
     for (const k of [...keys].sort()) current[k] = o[k] ?? null;
-    return `${o.id}:${o.node_id}:${digest(current)}`;
+    return { current, version: `${o.id}:${o.node_id}:${digest(current)}` };
+  }
+
+  /**
+   * The org's rulesets (id, name, target, enforcement) and a token over that set. `create_org_ruleset` has no
+   * existing object to version, so it pins the set: it refuses if a ruleset was added, removed or re-enforced
+   * while the human was reading the prompt. A ruleset's rules are not part of the token (list responses omit them).
+   * Reads at most GHE_MAX_PAGES pages.
+   */
+  async rulesetSetSnapshot(org: string): Promise<Snapshot<RulesetRow[]>> {
+    const rows = await this.paginate<RulesetRow>(`/orgs/${enc(org)}/rulesets`);
+    const current = rows.map((r) => ({ id: r.id, name: r.name, target: r.target, enforcement: r.enforcement }));
+    return { current, version: digest(current.map((r) => digest(r)).sort()) };
+  }
+
+  /**
+   * Branch protection as it reads today, summarised, and a token over every field in the summary (including
+   * who the push restrictions name). An unprotected (or missing) branch is `current: null`, version "unprotected".
+   */
+  async branchProtectionSnapshot(org: string, repo: string, branch: string): Promise<Snapshot<ProtectionSummary | null>> {
+    const p = await this.getOrUndefined<RawProtection>(`/repos/${enc(org)}/${enc(repo)}/branches/${enc(branch)}/protection`);
+    if (!p) return { current: null, version: "unprotected" };
+    const current = summarizeProtection(p);
+    return { current, version: digest({ ...current, restrictionLogins: restrictionNames(p) }) };
+  }
+
+  /** The org's Actions policy (`enabled_repositories`, `allowed_actions`) and a token over both. */
+  async actionsPermissionsSnapshot(org: string): Promise<Snapshot<{ enabled_repositories: unknown; allowed_actions: unknown }> | undefined> {
+    const p = await this.getOrUndefined<{ enabled_repositories?: unknown; allowed_actions?: unknown }>(`/orgs/${enc(org)}/actions/permissions`);
+    if (!p) return undefined;
+    const current = { enabled_repositories: p.enabled_repositories ?? null, allowed_actions: p.allowed_actions ?? null };
+    return { current, version: digest(current) };
+  }
+
+  /**
+   * A repository's `security_and_analysis` statuses and a token over repo id + node_id + those statuses. Unlike
+   * `repoVersion` it does not include `updated_at`, which moves with ordinary repo activity and would fail the
+   * approval on a busy repo. Statuses are "unknown" when the token cannot see them.
+   */
+  async repoSecuritySnapshot(org: string, repo: string): Promise<Snapshot<Record<string, string>> | undefined> {
+    const r = await this.getOrUndefined<{ id: number; node_id: string; security_and_analysis?: Record<string, { status?: string } | null> | null }>(
+      `/repos/${enc(org)}/${enc(repo)}`,
+    );
+    if (!r) return undefined;
+    const sa = r.security_and_analysis ?? {};
+    const current: Record<string, string> = {};
+    for (const k of ["secret_scanning", "secret_scanning_push_protection", "advanced_security"]) current[k] = sa[k]?.status ?? "unknown";
+    return { current, version: `${r.id}:${r.node_id}:${digest(current)}` };
   }
 
   private async getOrUndefined<T>(path: string): Promise<T | undefined> {
@@ -339,6 +391,72 @@ export class GithubClient {
       throw err;
     }
   }
+}
+
+/** What a human is shown as "current" for a target, and the version token that pins exactly that state. */
+export interface Snapshot<T> {
+  current: T;
+  version: string;
+}
+
+export interface RulesetRow {
+  id: number;
+  name: string;
+  target?: string;
+  enforcement?: string;
+}
+
+/** The parts of a branch-protection response a human needs to compare. `null` = the feature is off / not configured. */
+export interface ProtectionSummary {
+  required_approving_reviews: number | null;
+  dismiss_stale_reviews: boolean | null;
+  require_code_owner_reviews: boolean | null;
+  required_status_checks: string[] | null;
+  enforce_admins: boolean;
+  allow_force_pushes: boolean;
+  allow_deletions: boolean;
+  push_restrictions: string | null;
+  required_linear_history: boolean;
+  required_conversation_resolution: boolean;
+}
+
+interface RawProtection {
+  required_status_checks?: { contexts?: string[]; checks?: Array<{ context: string }> } | null;
+  required_pull_request_reviews?: { dismiss_stale_reviews?: boolean; require_code_owner_reviews?: boolean; required_approving_review_count?: number } | null;
+  enforce_admins?: { enabled?: boolean } | null;
+  allow_force_pushes?: { enabled?: boolean } | null;
+  allow_deletions?: { enabled?: boolean } | null;
+  required_linear_history?: { enabled?: boolean } | null;
+  required_conversation_resolution?: { enabled?: boolean } | null;
+  restrictions?: { users?: Array<{ login: string }>; teams?: Array<{ slug: string }>; apps?: Array<{ slug?: string }> } | null;
+}
+
+function restrictionNames(p: RawProtection): string[] | null {
+  const r = p.restrictions;
+  if (!r) return null;
+  return [
+    ...(r.users ?? []).map((u) => `user:${u.login}`),
+    ...(r.teams ?? []).map((t) => `team:${t.slug}`),
+    ...(r.apps ?? []).map((a) => `app:${a.slug ?? "?"}`),
+  ].sort();
+}
+
+export function summarizeProtection(p: RawProtection): ProtectionSummary {
+  const pr = p.required_pull_request_reviews;
+  const checks = p.required_status_checks;
+  const names = restrictionNames(p);
+  return {
+    required_approving_reviews: pr ? (pr.required_approving_review_count ?? 0) : null,
+    dismiss_stale_reviews: pr ? (pr.dismiss_stale_reviews ?? false) : null,
+    require_code_owner_reviews: pr ? (pr.require_code_owner_reviews ?? false) : null,
+    required_status_checks: checks ? [...new Set([...(checks.contexts ?? []), ...(checks.checks ?? []).map((c) => c.context)])].sort() : null,
+    enforce_admins: p.enforce_admins?.enabled ?? false,
+    allow_force_pushes: p.allow_force_pushes?.enabled ?? false,
+    allow_deletions: p.allow_deletions?.enabled ?? false,
+    push_restrictions: names ? (names.length ? names.join(", ") : "nobody") : null,
+    required_linear_history: p.required_linear_history?.enabled ?? false,
+    required_conversation_resolution: p.required_conversation_resolution?.enabled ?? false,
+  };
 }
 
 /** Short sha256 over a key-order-independent JSON rendering. */
