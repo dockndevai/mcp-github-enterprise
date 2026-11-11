@@ -24,6 +24,18 @@ const WRITABLE_ORG_KEYS = new Set([
   "advanced_security_enabled_for_new_repositories",
 ]);
 
+/** One `current → new` line per org field about to be written; unwritable keys the caller passed are listed too. */
+function orgChangeDetails(
+  snap: { current: Record<string, unknown> } | undefined,
+  body: Record<string, unknown>,
+  ignored: string[] = [],
+): Record<string, string> {
+  const details: Record<string, string> = {};
+  for (const k of Object.keys(body)) details[k] = snap ? change(snap.current[k], body[k]) : `(current value unavailable) → ${show(body[k])}`;
+  if (ignored.length) details["ignored (not writable)"] = ignored.join(", ");
+  return details;
+}
+
 export const writeTools: ToolDef[] = [
   {
     name: "harden_org_settings",
@@ -46,16 +58,20 @@ export const writeTools: ToolDef[] = [
       const o = a.org as string;
       const { dryRun } = policy.guard({ tool: "harden_org_settings", capability: "write", org: o });
       const body: Record<string, unknown> = { ...ORG_SECURITY_BASELINE };
+      const ignored: string[] = [];
       for (const [k, v] of Object.entries((a.overrides as Record<string, unknown>) ?? {})) {
         if (WRITABLE_ORG_KEYS.has(k)) body[k] = v;
+        else ignored.push(k);
       }
       if (dryRun) return textResult(`[dry-run] Would PATCH org '${o}' settings: ${JSON.stringify(body)}`);
+      const keys = Object.keys(body);
+      const snap = await client.orgSettingsSnapshot(o, keys);
       const ok = await confirm.confirm({
         action: "apply the security baseline to org settings",
         reversible: true,
         target: o,
-        details: { fields: Object.keys(body).length },
-        probe: () => client.orgSettingsVersion(o, Object.keys(body)),
+        details: orgChangeDetails(snap, body, ignored),
+        probe: pinned(snap?.version, () => client.orgSettingsVersion(o, keys)),
       });
       if (!ok.approved) return textResult(`Cancelled — ${ok.reason}.`);
       return jsonResult(await client.updateOrg(o, body));
@@ -89,14 +105,11 @@ export const writeTools: ToolDef[] = [
       if (dryRun) return textResult(`[dry-run] Would PATCH org '${o}': ${JSON.stringify(body)}${ignored.length ? ` (ignored: ${ignored.join(", ")})` : ""}`);
       const keys = Object.keys(body);
       const snap = await client.orgSettingsSnapshot(o, keys);
-      const details: Record<string, string> = {};
-      for (const k of keys) details[k] = snap ? change(snap.current[k], body[k]) : `(current value unavailable) → ${show(body[k])}`;
-      if (ignored.length) details["ignored (not writable)"] = ignored.join(", ");
       const ok = await confirm.confirm({
         action: "change organization settings",
         reversible: true,
         target: o,
-        details,
+        details: orgChangeDetails(snap, body, ignored),
         probe: pinned(snap?.version, () => client.orgSettingsVersion(o, keys)),
       });
       if (!ok.approved) return textResult(`Cancelled — ${ok.reason}.`);
@@ -111,7 +124,8 @@ export const writeTools: ToolDef[] = [
       description:
         "Set the organization's GitHub Actions policy — which repositories may run Actions and which actions are allowed " +
         "(restrict to 'selected' or 'local_only' to keep untrusted marketplace actions out of CI). Honors dry-run and " +
-        "asks a human to approve the change (current → new) before it writes.",
+        "asks a human to approve the change (current → new) before it writes. GitHub requires enabled_repositories on every " +
+        "write, so when you set only allowed_actions the current enabled_repositories value is kept.",
       inputSchema: {
         org,
         enabled_repositories: z.enum(["all", "none", "selected"]).optional().describe("Which repos may run Actions"),
@@ -121,16 +135,44 @@ export const writeTools: ToolDef[] = [
     handler: async (a, { client, policy, confirm }) => {
       const o = a.org as string;
       const { dryRun } = policy.guard({ tool: "set_actions_permissions", capability: "write", org: o });
-      const body: Record<string, unknown> = {};
-      if (a.enabled_repositories) body.enabled_repositories = a.enabled_repositories;
-      if (a.allowed_actions) body.allowed_actions = a.allowed_actions;
-      if (Object.keys(body).length === 0) return { content: [{ type: "text" as const, text: "Nothing to set." }], isError: true };
-      if (dryRun) return textResult(`[dry-run] Would set Actions permissions on '${o}': ${JSON.stringify(body)}`);
+      const asked: Record<string, unknown> = {};
+      if (a.enabled_repositories) asked.enabled_repositories = a.enabled_repositories;
+      if (a.allowed_actions) asked.allowed_actions = a.allowed_actions;
+      if (Object.keys(asked).length === 0) return { content: [{ type: "text" as const, text: "Nothing to set." }], isError: true };
+      if (dryRun) {
+        return textResult(
+          `[dry-run] Would set Actions permissions on '${o}': ${JSON.stringify(asked)}` +
+            (asked.enabled_repositories ? "" : " (enabled_repositories, which GitHub requires, would be kept at its current value)"),
+        );
+      }
       const snap = await client.actionsPermissionsSnapshot(o);
+      // GitHub's PUT /orgs/{org}/actions/permissions requires `enabled_repositories`. Read-modify-write: a field the
+      // caller did not name keeps its current value, so setting only `allowed_actions` is a valid request.
+      const body: Record<string, unknown> = { ...asked };
+      if (body.enabled_repositories === undefined) {
+        const cur = snap?.current.enabled_repositories;
+        if (typeof cur !== "string") {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  "enabled_repositories is required by GitHub and the org's current Actions policy could not be read; " +
+                  "pass enabled_repositories explicitly.",
+              },
+            ],
+            isError: true,
+          };
+        }
+        body.enabled_repositories = cur;
+      }
+      // Sent back unchanged so the write does not depend on how GitHub treats an omitted `sha_pinning_required`.
+      if (snap && snap.current.sha_pinning_required !== undefined) body.sha_pinning_required = snap.current.sha_pinning_required;
       const details: Record<string, string> = {};
       for (const k of ["enabled_repositories", "allowed_actions"] as const) {
-        details[k] = !snap ? `(current value unavailable) → ${show(body[k])}` : k in body ? change(snap.current[k], body[k]) : `${show(snap.current[k])} (unchanged)`;
+        details[k] = !snap ? `(current value unavailable) → ${show(body[k])}` : k in asked ? change(snap.current[k], body[k]) : `${show(snap.current[k])} (unchanged)`;
       }
+      if (snap && snap.current.sha_pinning_required !== undefined) details.sha_pinning_required = `${show(snap.current.sha_pinning_required)} (unchanged)`;
       const ok = await confirm.confirm({
         action: "change the organization's GitHub Actions policy",
         reversible: true,
@@ -249,7 +291,8 @@ export const writeTools: ToolDef[] = [
         repo,
         branch: z.string().describe("Branch to protect, e.g. main"),
         requiredApprovals: z.number().int().min(0).max(6).optional().describe("Required approving reviews (default 1)"),
-        requireStatusChecks: z.array(z.string()).optional().describe("Status check contexts that must pass"),
+        requiredStatusChecks: z.array(z.string()).optional().describe("Status check contexts that must pass (same spelling as requiredApprovals)"),
+        requireStatusChecks: z.array(z.string()).optional().describe("Alias of requiredStatusChecks; if both are given the contexts are merged"),
         enforceAdmins: z.boolean().optional().describe("Apply the rules to admins too (default true)"),
       },
     },
@@ -257,7 +300,7 @@ export const writeTools: ToolDef[] = [
       const o = a.org as string;
       const { dryRun } = policy.guard({ tool: "protect_branch", capability: "write", org: o });
       const approvals = (a.requiredApprovals as number) ?? 1;
-      const checks = (a.requiredStatusChecks as string[] | undefined) ?? (a.requireStatusChecks as string[] | undefined) ?? [];
+      const checks = [...new Set([...((a.requiredStatusChecks as string[] | undefined) ?? []), ...((a.requireStatusChecks as string[] | undefined) ?? [])])];
       const body = {
         required_status_checks: checks.length ? { strict: true, contexts: checks } : null,
         enforce_admins: (a.enforceAdmins as boolean | undefined) ?? true,

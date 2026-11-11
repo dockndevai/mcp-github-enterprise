@@ -67,10 +67,10 @@ Registered only up to the active mode: **23** in `read-only`, **32** in `read-wr
 ### Write (`read-write`+)
 `harden_org_settings` · `update_org_settings` · `set_actions_permissions` · `create_team` · `set_member_role` · `create_org_ruleset` · `protect_branch` · `update_repo_security` · `create_webhook`
 
-Human-approved before they write (when the client can prompt; refused without a prompt under `GHE_REQUIRE_HUMAN_APPROVAL=true`): `harden_org_settings`, `update_org_settings`, `set_actions_permissions`, `create_org_ruleset`, `protect_branch`, `update_repo_security`, `create_webhook`, and `set_member_role` when granting `admin`. The prompt shows what changes (`current → new` per field; for `create_org_ruleset`, the new ruleset next to the existing ones) and the approval is pinned to the state it was shown. Under `GHE_DRY_RUN=true` they return before any prompt. `create_team` is not prompted.
+Human-approved before they write (when the client can prompt; refused without a prompt under `GHE_REQUIRE_HUMAN_APPROVAL=true`): `harden_org_settings`, `update_org_settings`, `set_actions_permissions`, `create_org_ruleset`, `protect_branch`, `update_repo_security`, `create_webhook`, and `set_member_role` when granting `admin`. The prompt shows what changes (`current → new` per field; for `create_org_ruleset`, the new ruleset next to the existing ones) and the approval is pinned to the state it was shown. Under `GHE_DRY_RUN=true` they return before any prompt. `create_team` is not prompted. `set_actions_permissions` sends GitHub's required `enabled_repositories` on every write (setting only `allowed_actions` keeps the current `enabled_repositories`, read from the org's live policy). `protect_branch` takes `requiredStatusChecks` (or its alias `requireStatusChecks`).
 
 ### Admin (`admin`, destructive ones also need `GHE_ALLOW_DELETE`)
-`create_repository` (additive, not prompted) · `delete_repository` · `remove_member` · `delete_team` · `delete_org_ruleset` · `delete_webhook`
+`create_repository` (a `private` repository is created without a prompt; `public` and `internal` ask a human first, and are refused under `GHE_REQUIRE_HUMAN_APPROVAL=true` when the client cannot prompt) · `delete_repository` · `remove_member` · `delete_team` · `delete_org_ruleset` · `delete_webhook`
 
 ## Security posture baseline
 
