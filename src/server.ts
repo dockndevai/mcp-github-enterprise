@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AppConfig } from "./config.js";
 import { GithubClient, GithubError } from "./github/client.js";
@@ -10,14 +11,26 @@ import { annotationsFor } from "./tools/annotations.js";
 import type { ToolContext, ToolDef } from "./tools/types.js";
 import { writeTools } from "./tools/write.js";
 
+/**
+ * The version is read from package.json at runtime so it can never drift from the published package.
+ * `../package.json` resolves from both `src/` (tsx, vitest) and `dist/` (the built server): `package.json`
+ * is always part of the npm tarball and is copied into the Docker image by `COPY . .`.
+ */
+export const SERVER_VERSION: string = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
+
 export const ALL_TOOLS: ToolDef[] = [...readTools, ...writeTools, ...adminTools];
 
 export function buildServer(config: AppConfig): { server: McpServer; enabled: string[] } {
   const policy = new SecurityPolicy(config.security);
   const client = new GithubClient(config.connection);
-  const server = new McpServer({ name: "mcp-github-enterprise", version: "0.1.0" });
+  const server = new McpServer({ name: "mcp-github-enterprise", version: SERVER_VERSION });
   const guard = new GuardClient(loadGuardConfig());
-  const ctx: ToolContext = { client, policy, confirm: makeConfirmer(server), guard };
+  const confirmer = makeConfirmer(server, {
+    name: "mcp-github-enterprise",
+    requireHuman: config.security.requireHumanApproval,
+    audit: config.security.auditLog,
+  });
+  const ctx: ToolContext = { client, policy, confirm: confirmer, guard };
 
   const enabled: string[] = [];
   for (const tool of ALL_TOOLS) {
@@ -25,11 +38,13 @@ export function buildServer(config: AppConfig): { server: McpServer; enabled: st
     enabled.push(tool.name);
     server.registerTool(tool.name, { ...tool.config, annotations: annotationsFor(tool) }, async (args: Record<string, unknown>) => {
       try {
+        // Every approval prompt in this call is bound to this tool + these exact arguments.
+        const callCtx: ToolContext = { ...ctx, confirm: confirmer.forCall(tool.name, args ?? {}) };
         // laya-guard: assess every mutating op before it runs (no-op unless GHE_GUARD_MODE is set).
         if (tool.capability !== "read") {
-          await guard.enforce({ tool: tool.name, command: `${tool.name} ${JSON.stringify(args ?? {})}`, context: tool.name }, ctx.confirm);
+          await guard.enforce({ tool: tool.name, command: `${tool.name} ${JSON.stringify(args ?? {})}`, context: tool.name }, callCtx.confirm);
         }
-        return await tool.handler(args ?? {}, ctx);
+        return await tool.handler(args ?? {}, callCtx);
       } catch (err) {
         return toErrorResult(err);
       }

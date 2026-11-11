@@ -59,6 +59,7 @@ export function loadConfig(): AppConfig {
       requireConfirmation: bool("GHE_REQUIRE_CONFIRMATION", true),
       dryRun: bool("GHE_DRY_RUN", false),
       auditLog: bool("GHE_AUDIT_LOG", true),
+      requireHumanApproval: bool("GHE_REQUIRE_HUMAN_APPROVAL", false),
     },
   };
 }

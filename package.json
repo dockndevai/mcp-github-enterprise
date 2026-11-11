@@ -1,7 +1,7 @@
 {
   "name": "@dockndevai/mcp-github-enterprise",
   "mcpName": "io.github.dockndevai/mcp-github-enterprise",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Model Context Protocol server for GitHub Enterprise (Cloud & Server) — organizations, members, teams, repos, rulesets, security alerts, Actions, and an org security-posture baseline, with governance controls (access modes, org scoping, protected orgs, delete gating, confirmation, dry-run, audit).",
   "type": "module",
   "license": "MIT",

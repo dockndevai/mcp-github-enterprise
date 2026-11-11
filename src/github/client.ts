@@ -9,6 +9,7 @@
  *   - Per-request timeout via AbortController.
  *   - Rate-limit headers surfaced so callers can back off before a 403.
  */
+import { createHash } from "node:crypto";
 import type { GithubConnection } from "../config.js";
 
 export class GithubError extends Error {
@@ -239,6 +240,119 @@ export class GithubClient {
   enterpriseAuditLog(enterprise: string, phrase?: string, perPage = 50) {
     return this.request("GET", `/enterprises/${enc(enterprise)}/audit-log`, { query: { phrase, per_page: perPage } });
   }
+
+  // --- Version tokens (pinned across a human-approval prompt) ------------------
+  // Each returns a short, stable token for the target, or `undefined` when it does not exist (404).
+  // Transport / auth errors propagate: the confirmer treats a failing first probe as "unbound" and a
+  // failing second probe as a changed resource. Volatile counters (stars, open issues, member counts)
+  // are deliberately NOT part of any token — they would make every approval fail on a busy target.
+
+  /**
+   * Repository: immutable `id` + `node_id` (a delete-and-recreate under the same name gets a new id)
+   * and GitHub's `updated_at`. A change that GitHub does not reflect in `updated_at` (or two changes
+   * within its one-second resolution) is not detected; the stable `id` is what rules out a recreate.
+   */
+  async repoVersion(org: string, repo: string): Promise<string | undefined> {
+    const r = await this.getOrUndefined<{ id: number; node_id: string; updated_at: string }>(`/repos/${enc(org)}/${enc(repo)}`);
+    return r ? `${r.id}:${r.node_id}:${r.updated_at}` : undefined;
+  }
+
+  /**
+   * Organization membership: the user's immutable id, role and state (active / pending). Detects a role
+   * change or a pending-invite -> active transition during the prompt. A user who left and was re-added
+   * with the same role is not distinguishable. `undefined` when the user has no membership.
+   */
+  async membershipVersion(org: string, username: string): Promise<string | undefined> {
+    const m = await this.getOrUndefined<{ role: string; state: string; user?: { id: number } }>(
+      `/orgs/${enc(org)}/memberships/${enc(username)}`,
+    );
+    return m ? `${m.user?.id ?? "?"}:${m.role}:${m.state}` : undefined;
+  }
+
+  /**
+   * Team: id, node_id, `updated_at` and a hash of its
+   * name / description / privacy / permission / parent. Member and repo counts are excluded (volatile),
+   * so a membership change during the prompt is NOT detected.
+   */
+  async teamVersion(org: string, slug: string): Promise<string | undefined> {
+    const t = await this.getOrUndefined<Record<string, unknown> & { id: number; node_id: string; updated_at?: string; parent?: { id?: number } | null }>(
+      `/orgs/${enc(org)}/teams/${enc(slug)}`,
+    );
+    if (!t) return undefined;
+    const content = digest({ name: t.name, description: t.description, privacy: t.privacy, permission: t.permission, parent: t.parent?.id ?? null });
+    return `${t.id}:${t.node_id}:${t.updated_at ?? "-"}:${content}`;
+  }
+
+  /**
+   * Org ruleset: id, `updated_at` and a hash of its name, target, enforcement, conditions and rules, so
+   * the human approves the protection as it currently reads. Bypass actors are not part of the hash.
+   */
+  async rulesetVersion(org: string, id: number): Promise<string | undefined> {
+    const r = await this.getOrUndefined<Record<string, unknown> & { id: number; updated_at?: string }>(`/orgs/${enc(org)}/rulesets/${id}`);
+    if (!r) return undefined;
+    const content = digest({ name: r.name, target: r.target, enforcement: r.enforcement, conditions: r.conditions, rules: r.rules });
+    return `${r.id}:${r.updated_at ?? "-"}:${content}`;
+  }
+
+  /**
+   * Org webhook: id, `updated_at` and a hash of its payload URL, events and active flag. The signing
+   * secret is never read or hashed (GitHub masks it in responses anyway).
+   */
+  async webhookVersion(org: string, id: number): Promise<string | undefined> {
+    const h = await this.getOrUndefined<{ id: number; updated_at?: string; active?: boolean; events?: string[]; config?: { url?: string; content_type?: string } }>(
+      `/orgs/${enc(org)}/hooks/${id}`,
+    );
+    if (!h) return undefined;
+    const content = digest({ active: h.active, events: [...(h.events ?? [])].sort(), url: h.config?.url, contentType: h.config?.content_type });
+    return `${h.id}:${h.updated_at ?? "-"}:${content}`;
+  }
+
+  /**
+   * The org's webhook set (id, url, events, active per hook; secrets excluded). Pinned for create_webhook,
+   * which has no existing object to version: it refuses if a webhook was added, removed or edited while the
+   * human was reading the prompt. Reads at most GHE_MAX_PAGES pages; it does not pin the org's identity itself.
+   */
+  async webhookSetVersion(org: string): Promise<string | undefined> {
+    const hooks = await this.paginate<{ id: number; active?: boolean; events?: string[]; config?: { url?: string } }>(`/orgs/${enc(org)}/hooks`);
+    const rows = hooks.map((h) => `${h.id}:${digest({ a: h.active, e: [...(h.events ?? [])].sort(), u: h.config?.url })}`).sort();
+    return digest(rows);
+  }
+
+  /**
+   * The org settings that `harden_org_settings` is about to overwrite: org id + node_id and the CURRENT
+   * value of exactly the keys the action will write. Detects someone else changing those settings during
+   * the prompt; changes to other org fields are intentionally ignored.
+   */
+  async orgSettingsVersion(org: string, keys: string[]): Promise<string | undefined> {
+    const o = await this.getOrUndefined<Record<string, unknown> & { id: number; node_id: string }>(`/orgs/${enc(org)}`);
+    if (!o) return undefined;
+    const current: Record<string, unknown> = {};
+    for (const k of [...keys].sort()) current[k] = o[k] ?? null;
+    return `${o.id}:${o.node_id}:${digest(current)}`;
+  }
+
+  private async getOrUndefined<T>(path: string): Promise<T | undefined> {
+    try {
+      return await this.request<T>("GET", path);
+    } catch (err) {
+      if (err instanceof GithubError && err.status === 404) return undefined;
+      throw err;
+    }
+  }
+}
+
+/** Short sha256 over a key-order-independent JSON rendering. */
+function digest(value: unknown): string {
+  return createHash("sha256").update(canonical(value)).digest("hex").slice(0, 12);
+}
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    const o = value as Record<string, unknown>;
+    return `{${Object.keys(o).sort().filter((k) => o[k] !== undefined).map((k) => `${JSON.stringify(k)}:${canonical(o[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
 }
 
 function enc(s: string): string {
