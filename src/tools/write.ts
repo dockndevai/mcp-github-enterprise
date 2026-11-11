@@ -52,6 +52,7 @@ export const writeTools: ToolDef[] = [
       if (dryRun) return textResult(`[dry-run] Would PATCH org '${o}' settings: ${JSON.stringify(body)}`);
       const ok = await confirm.confirm({
         action: "apply the security baseline to org settings",
+        reversible: true,
         target: o,
         details: { fields: Object.keys(body).length },
         probe: () => client.orgSettingsVersion(o, Object.keys(body)),
@@ -93,6 +94,7 @@ export const writeTools: ToolDef[] = [
       if (ignored.length) details["ignored (not writable)"] = ignored.join(", ");
       const ok = await confirm.confirm({
         action: "change organization settings",
+        reversible: true,
         target: o,
         details,
         probe: pinned(snap?.version, () => client.orgSettingsVersion(o, keys)),
@@ -131,6 +133,7 @@ export const writeTools: ToolDef[] = [
       }
       const ok = await confirm.confirm({
         action: "change the organization's GitHub Actions policy",
+        reversible: true,
         target: o,
         details,
         probe: pinned(snap?.version, async () => (await client.actionsPermissionsSnapshot(o))?.version),
@@ -213,6 +216,7 @@ export const writeTools: ToolDef[] = [
       const clash = snap.current.find((r) => r.name === body.name);
       const ok = await confirm.confirm({
         action: "create an organization ruleset (org-wide branch/tag rules)",
+        reversible: true,
         target: `${name} in ${o}`,
         details: {
           ruleset: `${name} (target ${show(body.target)}, enforcement ${show(body.enforcement)})`,
@@ -294,6 +298,7 @@ export const writeTools: ToolDef[] = [
       }
       const ok = await confirm.confirm({
         action: "replace branch protection",
+        reversible: true,
         target: `${o}/${repoName}@${branch}`,
         details,
         probe: pinned(snap.version, async () => (await client.branchProtectionSnapshot(o, repoName, branch)).version),
@@ -338,6 +343,7 @@ export const writeTools: ToolDef[] = [
       }
       const ok = await confirm.confirm({
         action: "change repository security settings",
+        reversible: true,
         target: `${o}/${repoName}`,
         details,
         probe: pinned(snap?.version, async () => (await client.repoSecuritySnapshot(o, repoName))?.version),
