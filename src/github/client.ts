@@ -359,11 +359,18 @@ export class GithubClient {
     return { current, version: digest({ ...current, restrictionLogins: restrictionNames(p) }) };
   }
 
-  /** The org's Actions policy (`enabled_repositories`, `allowed_actions`) and a token over both. */
-  async actionsPermissionsSnapshot(org: string): Promise<Snapshot<{ enabled_repositories: unknown; allowed_actions: unknown }> | undefined> {
-    const p = await this.getOrUndefined<{ enabled_repositories?: unknown; allowed_actions?: unknown }>(`/orgs/${enc(org)}/actions/permissions`);
+  /**
+   * The org's Actions policy (`enabled_repositories`, `allowed_actions`, and `sha_pinning_required` when GitHub
+   * reports it) and a token over all of it. `sha_pinning_required` is absent (undefined) on servers that do not
+   * return it, so those versions keep their previous token shape.
+   */
+  async actionsPermissionsSnapshot(org: string): Promise<Snapshot<ActionsPolicy> | undefined> {
+    const p = await this.getOrUndefined<{ enabled_repositories?: unknown; allowed_actions?: unknown; sha_pinning_required?: unknown }>(
+      `/orgs/${enc(org)}/actions/permissions`,
+    );
     if (!p) return undefined;
-    const current = { enabled_repositories: p.enabled_repositories ?? null, allowed_actions: p.allowed_actions ?? null };
+    const current: ActionsPolicy = { enabled_repositories: p.enabled_repositories ?? null, allowed_actions: p.allowed_actions ?? null };
+    if (typeof p.sha_pinning_required === "boolean") current.sha_pinning_required = p.sha_pinning_required;
     return { current, version: digest(current) };
   }
 
@@ -391,6 +398,13 @@ export class GithubClient {
       throw err;
     }
   }
+}
+
+/** The org's Actions policy as read from GET /orgs/{org}/actions/permissions. */
+export interface ActionsPolicy {
+  enabled_repositories: unknown;
+  allowed_actions: unknown;
+  sha_pinning_required?: boolean;
 }
 
 /** What a human is shown as "current" for a target, and the version token that pins exactly that state. */

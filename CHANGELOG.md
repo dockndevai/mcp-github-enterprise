@@ -18,8 +18,19 @@ All notable changes to this project are documented here. The format follows
   `update_repo_security` ran with no confirmation. They now prompt, show `current → new` per field, pin the
   approval to the state shown (refusing if it changed during the prompt), return before any prompt under
   `GHE_DRY_RUN`, and are refused without a prompt under `GHE_REQUIRE_HUMAN_APPROVAL=true` when the client cannot
-  elicit. `create_repository` stays unprompted: it is additive, private by default and has no existing state to
-  show or pin.
+  elicit. `create_repository` is prompted only for a `public` or `internal` repository (see below); a private one stays
+  unprompted.
+- **`create_repository` asks a human before creating a `public` or `internal` repository.** A private repository
+  (the default) is still created without a prompt. The prompt shows the repository, visibility and description; it
+  returns before prompting under `GHE_DRY_RUN`, and the call is refused under `GHE_REQUIRE_HUMAN_APPROVAL=true` when
+  the client cannot elicit.
+- `harden_org_settings` now shows `current → new` for every field it writes (like `update_org_settings`), marks
+  unchanged ones, and lists `overrides` keys it ignored. The prompt used to show only a field count.
+- `set_actions_permissions` sent a body with only `allowed_actions` when that was all the caller gave, but GitHub's
+  `PUT /orgs/{org}/actions/permissions` requires `enabled_repositories`. It now fills it from the org's current
+  policy (read-modify-write, pinned to the state the prompt showed), and sends `sha_pinning_required` back unchanged
+  when GitHub reports it. If the current policy cannot be read and `enabled_repositories` was not given, it refuses
+  instead of sending an invalid request.
 
 ### Added
 - **Approvals are bound to the exact action.** The prompt shows the tool, the full (secret-redacted)
@@ -34,6 +45,9 @@ All notable changes to this project are documented here. The format follows
 - `delete_repository` asks the human to type the repository's `org/repo`.
 
 ### Fixed
+- `protect_branch` read `requiredStatusChecks`, which was not in its input schema (so the SDK dropped it
+  before the handler ran); only `requireStatusChecks` worked. Both spellings are now in the schema and are merged
+  if given together.
 - The server advertised version `0.1.0` over MCP while the package was `0.1.1`. It now reads its version
   from `package.json` at runtime, and a test fails if the advertised version, `package.json`, `server.json`
   or `package-lock.json` diverge.

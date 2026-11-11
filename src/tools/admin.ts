@@ -17,7 +17,8 @@ export const adminTools: ToolDef[] = [
       title: "Create repository",
       description:
         "Create a repository in an organization. Requires admin mode. Defaults to private with auto-init; secret scanning " +
-        "and push protection are requested on creation where the plan allows.",
+        "and push protection are requested on creation where the plan allows. A public or internal repository asks a human " +
+        "to approve it first (a private one does not).",
       inputSchema: {
         org,
         name: z.string().describe("Repository name"),
@@ -26,14 +27,9 @@ export const adminTools: ToolDef[] = [
         autoInit: z.boolean().optional().describe("Initialize with a README (default true)"),
       },
     },
-    handler: async (a, { client, policy }) => {
+    handler: async (a, { client, policy, confirm }) => {
       const o = a.org as string;
       const { dryRun } = policy.guard({ tool: "create_repository", capability: "admin", org: o });
-      // Deliberately NOT behind an approval prompt: creation is additive (a new, empty repository named by the
-      // caller, private by default), there is no existing state to diff or pin, and it grants nothing that the
-      // admin-mode gate, the org allowlist and protected-orgs checks above do not already cover. The follow-on
-      // actions that matter are gated on their own: delete_repository (flag + typed name + human), and
-      // update_repo_security / protect_branch / set_member_role (human approval).
       const visibility = (a.visibility as string) ?? "private";
       const body = {
         name: a.name,
@@ -43,6 +39,22 @@ export const adminTools: ToolDef[] = [
         auto_init: (a.autoInit as boolean | undefined) ?? true,
       };
       if (dryRun) return textResult(`[dry-run] Would create ${visibility} repo '${o}/${a.name}'.`);
+      // A private repository is additive and stays unprompted (a new, empty repository, private by default, behind the
+      // admin-mode gate and the org allowlist). A public or internal one widens who can read what is pushed to it next, so
+      // a human approves it; with GHE_REQUIRE_HUMAN_APPROVAL=true it is refused when no human can be asked.
+      if (visibility !== "private") {
+        const ok = await confirm.confirm({
+          action: `create a ${visibility} repository`,
+          reversible: true,
+          target: `${o}/${a.name}`,
+          details: {
+            visibility,
+            description: a.description === undefined ? undefined : String(a.description),
+            "initialize with README": body.auto_init,
+          },
+        });
+        if (!ok.approved) return textResult(`Cancelled — ${ok.reason}.`);
+      }
       return jsonResult(await client.createRepo(o, body));
     },
   },

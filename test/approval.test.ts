@@ -124,7 +124,7 @@ describe("GHE_REQUIRE_HUMAN_APPROVAL", () => {
 });
 
 // Every confirm site that guards a destructive or high-impact write: a moved version blocks the backend call,
-// a stable version lets it through.
+// a stable version lets it through. (harden_org_settings reads a snapshot, not just a version: see approval-writes.test.ts.)
 const SITES: Array<{
   tool: string;
   args: Record<string, unknown>;
@@ -136,7 +136,6 @@ const SITES: Array<{
   { tool: "delete_team", args: { org: "acme", slug: "core", confirm: "core" }, version: "teamVersion", mutation: "deleteTeam" },
   { tool: "delete_org_ruleset", args: { org: "acme", rulesetId: 7, confirm: "7" }, version: "rulesetVersion", mutation: "deleteOrgRuleset" },
   { tool: "delete_webhook", args: { org: "acme", hookId: 9, confirm: "9" }, version: "webhookVersion", mutation: "deleteWebhook" },
-  { tool: "harden_org_settings", args: { org: "acme" }, version: "orgSettingsVersion", mutation: "updateOrg" },
   { tool: "set_member_role", args: { org: "acme", username: "bob", role: "admin" }, version: "membershipVersion", mutation: "setMembership" },
   { tool: "create_webhook", args: { org: "acme", url: "https://hooks.example.com/x", secret: "s3cr3t" }, version: "webhookSetVersion", mutation: "createWebhook" },
 ];
