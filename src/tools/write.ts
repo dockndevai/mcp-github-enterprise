@@ -49,7 +49,12 @@ export const writeTools: ToolDef[] = [
         if (WRITABLE_ORG_KEYS.has(k)) body[k] = v;
       }
       if (dryRun) return textResult(`[dry-run] Would PATCH org '${o}' settings: ${JSON.stringify(body)}`);
-      const ok = await confirm.confirm({ action: "apply the security baseline to org settings", target: o, details: { fields: Object.keys(body).length } });
+      const ok = await confirm.confirm({
+        action: "apply the security baseline to org settings",
+        target: o,
+        details: { fields: Object.keys(body).length },
+        probe: () => client.orgSettingsVersion(o, Object.keys(body)),
+      });
       if (!ok.approved) return textResult(`Cancelled — ${ok.reason}.`);
       return jsonResult(await client.updateOrg(o, body));
     },
@@ -146,7 +151,11 @@ export const writeTools: ToolDef[] = [
       const { dryRun } = policy.guard({ tool: "set_member_role", capability: "write", org: o });
       if (dryRun) return textResult(`[dry-run] Would set ${a.username} to '${a.role}' in '${o}'.`);
       if ((a.role as string) === "admin") {
-        const ok = await confirm.confirm({ action: "grant organization OWNER (admin)", target: `${a.username} in ${o}` });
+        const ok = await confirm.confirm({
+          action: "grant organization OWNER (admin)",
+          target: `${a.username} in ${o}`,
+          probe: () => client.membershipVersion(o, a.username as string),
+        });
         if (!ok.approved) return textResult(`Cancelled — ${ok.reason}.`);
       }
       return jsonResult(await client.setMembership(o, a.username as string, a.role as string));
@@ -266,7 +275,11 @@ export const writeTools: ToolDef[] = [
         },
       };
       if (dryRun) return textResult(`[dry-run] Would create webhook on '${o}' → ${a.url} for ${body.events.join(", ")}.`);
-      const ok = await confirm.confirm({ action: "create an organization webhook (sends event data off-platform)", target: `${o} → ${a.url}` });
+      const ok = await confirm.confirm({
+        action: "create an organization webhook (sends event data off-platform)",
+        target: `${o} → ${a.url}`,
+        probe: () => client.webhookSetVersion(o),
+      });
       if (!ok.approved) return textResult(`Cancelled — ${ok.reason}.`);
       return jsonResult(redact(await client.createWebhook(o, body)));
     },

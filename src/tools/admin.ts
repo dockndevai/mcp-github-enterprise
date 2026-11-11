@@ -68,7 +68,12 @@ export const adminTools: ToolDef[] = [
         confirmProvided: a.confirm as string | undefined,
       });
       if (dryRun) return textResult(`[dry-run] Would delete repository '${target}'.`);
-      const ok = await confirm.confirm({ action: "delete repository (code, issues, PRs, releases)", target });
+      const ok = await confirm.confirm({
+        action: "delete repository (code, issues, PRs, releases)",
+        target,
+        typed: true,
+        probe: () => client.repoVersion(o, a.repo as string),
+      });
       if (!ok.approved) return textResult(`Deletion cancelled — ${ok.reason}.`);
       await client.deleteRepo(o, a.repo as string);
       return jsonResult({ deleted: true, repository: target });
@@ -101,7 +106,11 @@ export const adminTools: ToolDef[] = [
         confirmProvided: a.confirm as string | undefined,
       });
       if (dryRun) return textResult(`[dry-run] Would remove '${username}' from '${o}'.`);
-      const ok = await confirm.confirm({ action: "remove member from the organization", target: `${username} in ${o}` });
+      const ok = await confirm.confirm({
+        action: "remove member from the organization",
+        target: `${username} in ${o}`,
+        probe: () => client.membershipVersion(o, username),
+      });
       if (!ok.approved) return textResult(`Removal cancelled — ${ok.reason}.`);
       await client.removeMember(o, username);
       return jsonResult({ removed: true, org: o, username });
@@ -134,7 +143,11 @@ export const adminTools: ToolDef[] = [
         confirmProvided: a.confirm as string | undefined,
       });
       if (dryRun) return textResult(`[dry-run] Would delete team '${slug}' in '${o}'.`);
-      const ok = await confirm.confirm({ action: "delete team", target: `${slug} in ${o}` });
+      const ok = await confirm.confirm({
+        action: "delete team",
+        target: `${slug} in ${o}`,
+        probe: () => client.teamVersion(o, slug),
+      });
       if (!ok.approved) return textResult(`Deletion cancelled — ${ok.reason}.`);
       await client.deleteTeam(o, slug);
       return jsonResult({ deleted: true, org: o, team: slug });
@@ -167,7 +180,11 @@ export const adminTools: ToolDef[] = [
         confirmProvided: a.confirm as string | undefined,
       });
       if (dryRun) return textResult(`[dry-run] Would delete ruleset ${id} in '${o}'.`);
-      const ok = await confirm.confirm({ action: "delete org ruleset (removes org-wide protection)", target: `ruleset ${id} in ${o}` });
+      const ok = await confirm.confirm({
+        action: "delete org ruleset (removes org-wide protection)",
+        target: `ruleset ${id} in ${o}`,
+        probe: () => client.rulesetVersion(o, id),
+      });
       if (!ok.approved) return textResult(`Deletion cancelled — ${ok.reason}.`);
       await client.deleteOrgRuleset(o, id);
       return jsonResult({ deleted: true, org: o, rulesetId: id });
@@ -200,7 +217,11 @@ export const adminTools: ToolDef[] = [
         confirmProvided: a.confirm as string | undefined,
       });
       if (dryRun) return textResult(`[dry-run] Would delete webhook ${id} in '${o}'.`);
-      const ok = await confirm.confirm({ action: "delete org webhook", target: `webhook ${id} in ${o}` });
+      const ok = await confirm.confirm({
+        action: "delete org webhook",
+        target: `webhook ${id} in ${o}`,
+        probe: () => client.webhookVersion(o, id),
+      });
       if (!ok.approved) return textResult(`Deletion cancelled — ${ok.reason}.`);
       await client.deleteWebhook(o, id);
       return jsonResult({ deleted: true, org: o, hookId: id });

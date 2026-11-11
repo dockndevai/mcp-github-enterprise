@@ -14,7 +14,7 @@ Handing an agent an admin token to GitHub is risky: one loose instruction can de
 
 - **Read-only until you say otherwise.** Tools above the current access mode are *never advertised*.
 - **Pinned blast radius.** An org allowlist and protected (read-only-forever) orgs.
-- **Destructive ops double-gated.** Admin mode **＋** an explicit delete flag **＋** a typed confirmation **＋** a human prompt.
+- **Destructive ops double-gated.** Admin mode **＋** an explicit delete flag **＋** a typed confirmation **＋** a human prompt. The prompt shows the tool, the exact arguments and a fingerprint; the target's version is pinned across the prompt and the action is refused if it changed; a prompt nobody answers is a refusal.
 - **Secrets never leak.** Webhook secrets and secret-scanning values are redacted before anything reaches the model.
 - **Everything audited.** A JSON line per operation to stderr.
 
@@ -49,7 +49,9 @@ First call to run: **`whoami`** — confirms the token and base URL are wired co
 | `GHE_ALLOW_DELETE` | `false` | Required (with admin mode) for any destructive op. |
 | `GHE_REQUIRE_CONFIRMATION` | `true` | Destructive ops need a typed confirmation matching the target. |
 | `GHE_DRY_RUN` | `false` | Validate + log writes without sending them. |
-| `GHE_AUDIT_LOG` | `true` | JSON audit line per op to stderr. |
+| `GHE_AUDIT_LOG` | `true` | JSON audit line per op to stderr (also carries the approval receipts). |
+| Interactive confirmation | *(automatic)* | — | Destructive & high-impact actions prompt the human to approve via MCP elicitation before running. The prompt shows the tool, the exact arguments and a fingerprint; the target's version is pinned across the prompt and the action is refused if it changed; a prompt nobody answers is a refusal. `delete_repository` also asks the human to type `org/repo`. |
+| `GHE_REQUIRE_HUMAN_APPROVAL` | `false` | When `true`, destructive and high-impact ops are **refused** if the client cannot show an approval prompt (instead of falling back to the `GHE_ALLOW_DELETE` gate alone). |
 | `GHE_MAX_PAGES` | `10` | Auto-pagination cap (pages of 100). |
 | `GHE_GUARD_MODE` | `off` | Optional laya-guard AI risk gate: `monitor` \| `enforce`. |
 

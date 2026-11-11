@@ -22,6 +22,18 @@ Treat it like any other privileged automation and grant it the least access it n
   boolean is not enough. This prevents an agent from deleting the wrong thing on a
   loose instruction. When the client supports MCP elicitation, a human is also
   prompted to approve.
+- **Require a human for destructive ops.** Set `GHE_REQUIRE_HUMAN_APPROVAL=true` so the destructive
+  tools and the high-impact writes (`harden_org_settings`, `set_member_role` to `admin`,
+  `create_webhook`) are refused when the client cannot show an approval prompt. Each approval is bound to
+  the exact tool and arguments (fingerprint, with secret values redacted) and to the target's version; if the
+  target changed while the human was deciding, the action is refused. The version token covers:
+  repository — id, node id and `updated_at`; membership — user id, role and state; team — id, `updated_at`
+  and its name/description/privacy/permission/parent; org ruleset — id, `updated_at` and its
+  name/target/enforcement/conditions/rules; webhook — id, `updated_at` and its URL/events/active flag
+  (never the secret); `harden_org_settings` — the current values of the org settings about to be written;
+  `create_webhook` — the org's existing webhook set. `delete_repository` also asks the human to type the
+  repository's `org/repo`. A prompt nobody answers is a refusal. Approval receipts are written to the audit
+  log (`"audit":"approval"`, with `approvedBy` = `human` or `flag-only`).
 - **Preview with dry-run.** `GHE_DRY_RUN=true` validates and logs write intent
   without calling GitHub.
 - **Keep the audit log on.** `GHE_AUDIT_LOG=true` (default) writes a JSON line per
