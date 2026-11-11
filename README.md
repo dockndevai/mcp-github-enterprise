@@ -50,7 +50,7 @@ First call to run: **`whoami`** — confirms the token and base URL are wired co
 | `GHE_REQUIRE_CONFIRMATION` | `true` | Destructive ops need a typed confirmation matching the target. |
 | `GHE_DRY_RUN` | `false` | Validate + log writes without sending them. |
 | `GHE_AUDIT_LOG` | `true` | JSON audit line per op to stderr (also carries the approval receipts). |
-| Interactive confirmation | *(automatic)* | — | Destructive & high-impact actions prompt the human to approve via MCP elicitation before running. The prompt shows the tool, the exact arguments and a fingerprint; the target's version is pinned across the prompt and the action is refused if it changed; a prompt nobody answers is a refusal. `delete_repository` also asks the human to type `org/repo`. |
+| Interactive confirmation | *(automatic)* | — | Destructive & high-impact actions (including org settings, rulesets, branch protection, Actions policy and repo security changes) prompt the human to approve via MCP elicitation before running. The prompt shows the tool, the exact arguments and a fingerprint; the target's version is pinned across the prompt and the action is refused if it changed; a prompt nobody answers is a refusal. `delete_repository` also asks the human to type `org/repo`. |
 | `GHE_REQUIRE_HUMAN_APPROVAL` | `false` | When `true`, destructive and high-impact ops are **refused** if the client cannot show an approval prompt (instead of falling back to the `GHE_ALLOW_DELETE` gate alone). |
 | `GHE_MAX_PAGES` | `10` | Auto-pagination cap (pages of 100). |
 | `GHE_GUARD_MODE` | `off` | Optional laya-guard AI risk gate: `monitor` \| `enforce`. |
@@ -67,8 +67,10 @@ Registered only up to the active mode: **23** in `read-only`, **32** in `read-wr
 ### Write (`read-write`+)
 `harden_org_settings` · `update_org_settings` · `set_actions_permissions` · `create_team` · `set_member_role` · `create_org_ruleset` · `protect_branch` · `update_repo_security` · `create_webhook`
 
+Human-approved before they write (when the client can prompt; refused without a prompt under `GHE_REQUIRE_HUMAN_APPROVAL=true`): `harden_org_settings`, `update_org_settings`, `set_actions_permissions`, `create_org_ruleset`, `protect_branch`, `update_repo_security`, `create_webhook`, and `set_member_role` when granting `admin`. The prompt shows what changes (`current → new` per field; for `create_org_ruleset`, the new ruleset next to the existing ones) and the approval is pinned to the state it was shown. Under `GHE_DRY_RUN=true` they return before any prompt. `create_team` is not prompted.
+
 ### Admin (`admin`, destructive ones also need `GHE_ALLOW_DELETE`)
-`create_repository` · `delete_repository` · `remove_member` · `delete_team` · `delete_org_ruleset` · `delete_webhook`
+`create_repository` (additive, not prompted) · `delete_repository` · `remove_member` · `delete_team` · `delete_org_ruleset` · `delete_webhook`
 
 ## Security posture baseline
 

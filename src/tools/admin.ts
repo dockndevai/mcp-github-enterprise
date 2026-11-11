@@ -29,6 +29,11 @@ export const adminTools: ToolDef[] = [
     handler: async (a, { client, policy }) => {
       const o = a.org as string;
       const { dryRun } = policy.guard({ tool: "create_repository", capability: "admin", org: o });
+      // Deliberately NOT behind an approval prompt: creation is additive (a new, empty repository named by the
+      // caller, private by default), there is no existing state to diff or pin, and it grants nothing that the
+      // admin-mode gate, the org allowlist and protected-orgs checks above do not already cover. The follow-on
+      // actions that matter are gated on their own: delete_repository (flag + typed name + human), and
+      // update_repo_security / protect_branch / set_member_role (human approval).
       const visibility = (a.visibility as string) ?? "private";
       const body = {
         name: a.name,

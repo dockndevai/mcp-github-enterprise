@@ -10,6 +10,13 @@ All notable changes to this project are documented here. The format follows
   60 s request timeout, and a timeout fell through to "approved" (the `GHE_ALLOW_DELETE` gate had already
   passed). A prompt nobody answered therefore auto-approved a destructive operation. A timeout is now a
   refusal, and the wait defaults to 5 minutes.
+- **Org-wide security writes now need a human.** `update_org_settings` (the same fields `harden_org_settings`
+  already prompted for), `create_org_ruleset`, `protect_branch`, `set_actions_permissions` and
+  `update_repo_security` ran with no confirmation. They now prompt, show `current → new` per field, pin the
+  approval to the state shown (refusing if it changed during the prompt), return before any prompt under
+  `GHE_DRY_RUN`, and are refused without a prompt under `GHE_REQUIRE_HUMAN_APPROVAL=true` when the client cannot
+  elicit. `create_repository` stays unprompted: it is additive, private by default and has no existing state to
+  show or pin.
 
 ### Added
 - **Approvals are bound to the exact action.** The prompt shows the tool, the full (secret-redacted)
